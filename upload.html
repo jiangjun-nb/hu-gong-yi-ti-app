@@ -176,26 +176,75 @@ function setItem(i, text, cls) {
   st.className = "st" + (cls ? " " + cls : "");
 }
 
-function uploadOne(file, i) {
+var CHUNK_SIZE = 8 * 1024 * 1024;
+var CHUNK_THRESHOLD = 20 * 1024 * 1024;
+
+function xhrPost(url, body, onProgress) {
   return new Promise(function (resolve) {
-    setItem(i, "传中…", "run");
     var xhr = new XMLHttpRequest();
-    xhr.open("POST", RELAY + "/api/up/" + TOKEN + "/upload?filename=" + encodeURIComponent(file.name), true);
+    xhr.open("POST", url, true);
     xhr.setRequestHeader("Content-Type", "application/octet-stream");
-    xhr.upload.onprogress = function (ev) {
-      if (ev.lengthComputable) {
-        setItem(i, "传中 " + Math.round(ev.loaded / ev.total * 100) + "%", "run");
-      }
-    };
+    if (onProgress && xhr.upload) {
+      xhr.upload.onprogress = function (ev) {
+        if (ev.lengthComputable) onProgress(ev.loaded, ev.total);
+      };
+    }
     xhr.onload = function () {
       var ok = false;
       try { ok = JSON.parse(xhr.responseText).ok === true; } catch (e) {}
-      if (xhr.status === 200 && ok) { setItem(i, "✓ 已传", "ok"); resolve(true); }
-      else { setItem(i, "✗ 没传上", "err"); resolve(false); }
+      resolve({ http: xhr.status, ok: xhr.status === 200 && ok });
     };
-    xhr.onerror = function () { setItem(i, "✗ 断了", "err"); resolve(false); };
-    xhr.send(file);
+    xhr.onerror = function () { resolve({ http: 0, ok: false }); };
+    xhr.send(body);
   });
+}
+
+function uploadSingle(file, i, attempt) {
+  attempt = attempt || 1;
+  setItem(i, "传中…", "run");
+  return xhrPost(RELAY + "/api/up/" + TOKEN + "/upload?filename=" + encodeURIComponent(file.name), file, function (loaded, total) {
+    setItem(i, "传中 " + Math.round(loaded / total * 100) + "%", "run");
+  }).then(function (r) {
+    if (r.ok) { setItem(i, "✓ 已传", "ok"); return true; }
+    if (attempt < 3) {
+      setItem(i, "断了，重试 " + attempt + "/3…", "run");
+      return uploadSingle(file, i, attempt + 1);
+    }
+    setItem(i, "✗ 没传上", "err");
+    return false;
+  });
+}
+
+async function uploadChunked(file, i) {
+  var total = Math.ceil(file.size / CHUNK_SIZE);
+  var uploadId = Date.now().toString(36) + Math.random().toString(36).slice(2, 10);
+  var doneBytes = 0;
+  for (var c = 0; c < total; c++) {
+    var start = c * CHUNK_SIZE;
+    var end = Math.min(file.size, start + CHUNK_SIZE);
+    var blob = file.slice(start, end);
+    var ok = false;
+    for (var a = 1; a <= 3 && !ok; a++) {
+      var r = await xhrPost(RELAY + "/api/up/" + TOKEN + "/chunk?uploadId=" + uploadId + "&index=" + c + "&total=" + total, blob, function (loaded, chunkTotal) {
+        var pct = Math.round((doneBytes + loaded) / file.size * 100);
+        setItem(i, "传中 " + pct + "%（大文件分块传）", "run");
+      });
+      ok = r.ok;
+      if (!ok && a < 3) setItem(i, "第 " + (c + 1) + " 块断了，重试…", "run");
+    }
+    if (!ok) { setItem(i, "✗ 没传上", "err"); return false; }
+    doneBytes = end;
+    setItem(i, "传中 " + Math.round(doneBytes / file.size * 100) + "%（大文件分块传）", "run");
+  }
+  var fin = await xhrPost(RELAY + "/api/up/" + TOKEN + "/complete?uploadId=" + uploadId + "&filename=" + encodeURIComponent(file.name) + "&total=" + total + "&size=" + file.size, null);
+  if (fin.ok) { setItem(i, "✓ 已传", "ok"); return true; }
+  setItem(i, "✗ 没传上", "err");
+  return false;
+}
+
+function uploadOne(file, i) {
+  if (file.size > CHUNK_THRESHOLD) return uploadChunked(file, i);
+  return uploadSingle(file, i);
 }
 
 upBtn.addEventListener("click", async function () {
