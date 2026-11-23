@@ -55,12 +55,12 @@
 <body>
 <div class="wrap">
   <h1>传照片和视频</h1>
-  <p class="sub">选好照片和视频，点上传，传完我就收到了。<br>一次最多 500 个，可以分几次选，会自动加在一起。</p>
+  <p class="sub">选好照片和视频，点上传，传完我就收到了。<br>一次可以选 500 张。</p>
 
   <label class="pick" for="files">
     <div class="big">＋</div>
     <div class="t1">点这里选照片 / 视频</div>
-    <div class="t2">可以多选 · 照片和长视频都可以<br>选完还能再点一次继续加，凑够 500 一起传</div>
+    <div class="t2">照片和长视频都可以<br>一次选 500 张也没问题</div>
   </label>
   <input id="files" type="file" accept="image/*,video/*" multiple>
 
@@ -113,8 +113,7 @@ function updateCount() {
     clearBtn.style.display = "none";
     return;
   }
-  countEl.innerHTML = "已选 " + picked.length + " / " + MAX_FILES + " 个，共 " + fmt(totalSize()) +
-    "<small>不够可以再点上面继续加 · 满 500 就先传这批</small>";
+  countEl.innerHTML = "已选 " + picked.length + " / " + MAX_FILES + " 个，共 " + fmt(totalSize());
   upBtn.disabled = false;
   clearBtn.style.display = "block";
 }
@@ -133,11 +132,11 @@ fileInput.addEventListener("change", function (e) {
     added++;
   }
   if (picked.length >= MAX_FILES && fresh.length > added) {
-    statusEl.textContent = "已经满 500 个了，先传完这批，剩下的传完再选。";
+    statusEl.textContent = "已经满 500 个了，先传完这批再选下一批。";
   } else if (added === 0) {
     statusEl.textContent = "这些刚才已经选过了。";
   } else {
-    statusEl.textContent = "这次加了 " + added + " 个。";
+    statusEl.textContent = "已选 " + picked.length + " / " + MAX_FILES + " 个。";
   }
   renderQueue();
   updateCount();
