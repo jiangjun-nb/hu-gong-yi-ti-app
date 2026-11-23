@@ -22,24 +22,31 @@
   .pick .t1 { font-size: 18px; font-weight: 600; margin-top: 12px; }
   .pick .t2 { font-size: 13px; color: #8a857e; margin-top: 6px; line-height: 1.7; }
   input[type=file] { display: none; }
+  .count { text-align: center; font-size: 15px; font-weight: 600; margin-top: 14px; min-height: 20px; }
+  .count small { display: block; font-weight: 400; color: #8a857e; font-size: 12px; margin-top: 3px; }
   .btn {
-    display: block; width: 100%; margin-top: 16px; padding: 15px; font-size: 17px;
+    display: block; width: 100%; margin-top: 14px; padding: 15px; font-size: 17px;
     font-weight: 600; color: #fff; background: #b08d57; border: none; border-radius: 14px;
     cursor: pointer;
   }
   .btn:disabled { background: #cbbfae; cursor: default; }
-  .status { margin-top: 22px; font-size: 14px; color: #6b655c; text-align: center; min-height: 20px; }
+  .clear {
+    display: block; width: 100%; margin-top: 10px; padding: 10px; font-size: 14px;
+    color: #8a857e; background: transparent; border: none; cursor: pointer;
+  }
+  .status { margin-top: 16px; font-size: 14px; color: #6b655c; text-align: center; min-height: 20px; }
+  .overall { height: 8px; background: #eee7dc; border-radius: 4px; margin-top: 10px; overflow: hidden; display: none; }
+  .overall i { display: block; height: 100%; width: 0%; background: #b08d57; border-radius: 4px; transition: width .2s; }
   .list { margin-top: 14px; }
   .item {
-    background: #fff; border-radius: 12px; padding: 12px 14px; margin-bottom: 10px;
-    box-shadow: 0 1px 4px rgba(0,0,0,.06);
+    background: #fff; border-radius: 10px; padding: 9px 12px; margin-bottom: 6px;
+    box-shadow: 0 1px 4px rgba(0,0,0,.06); display: flex; justify-content: space-between; gap: 10px;
   }
-  .item .nm { font-size: 15px; font-weight: 600; word-break: break-all; }
-  .item .meta { font-size: 12px; color: #8a857e; margin-top: 4px; }
-  .bar { height: 6px; background: #eee7dc; border-radius: 3px; margin-top: 9px; overflow: hidden; }
-  .bar i { display: block; height: 100%; width: 0%; background: #b08d57; border-radius: 3px; transition: width .2s; }
-  .ok { color: #4c8a4c; font-weight: 600; }
-  .err { color: #c0392b; font-weight: 600; }
+  .item .nm { font-size: 13px; font-weight: 600; word-break: break-all; flex: 1; }
+  .item .st { font-size: 12px; color: #8a857e; white-space: nowrap; }
+  .item .st.ok { color: #4c8a4c; font-weight: 600; }
+  .item .st.err { color: #c0392b; font-weight: 600; }
+  .item .st.run { color: #b08d57; font-weight: 600; }
   h2 { font-size: 16px; margin: 30px 0 10px; }
   .empty { font-size: 13px; color: #a39d94; text-align: center; padding: 12px 0; }
   .note { margin-top: 26px; font-size: 12px; color: #a39d94; line-height: 1.8; text-align: center; }
@@ -48,17 +55,21 @@
 <body>
 <div class="wrap">
   <h1>传照片和视频</h1>
-  <p class="sub">选好照片和视频，点上传，传完我就收到了。<br>一次可以选很多个，慢慢传，不着急。</p>
+  <p class="sub">选好照片和视频，点上传，传完我就收到了。<br>一次最多 500 个，可以分几次选，会自动加在一起。</p>
 
   <label class="pick" for="files">
     <div class="big">＋</div>
     <div class="t1">点这里选照片 / 视频</div>
-    <div class="t2">可以多选 · 照片和长视频都可以<br>传的时候别关掉这个页面</div>
+    <div class="t2">可以多选 · 照片和长视频都可以<br>选完还能再点一次继续加，凑够 500 一起传</div>
   </label>
   <input id="files" type="file" accept="image/*,video/*" multiple>
 
+  <div class="count" id="count"></div>
+
   <button class="btn" id="upBtn" disabled>开始上传</button>
+  <button class="clear" id="clearBtn" style="display:none">清空重选</button>
   <div class="status" id="status"></div>
+  <div class="overall" id="overall"><i></i></div>
 
   <div class="list" id="queue"></div>
 
@@ -71,11 +82,18 @@
 <script>
 var RELAY = "https://hu-gong-yi-ti-relay-production.up.railway.app";
 var TOKEN = "8f78273c54f3c4df53d2a0831290f964";
+var MAX_FILES = 500;
+var CONCURRENCY = 3;
 var picked = [];
 var upBtn = document.getElementById("upBtn");
+var clearBtn = document.getElementById("clearBtn");
 var statusEl = document.getElementById("status");
+var countEl = document.getElementById("count");
 var queueEl = document.getElementById("queue");
 var doneEl = document.getElementById("done");
+var overallEl = document.getElementById("overall");
+var overallFill = overallEl.querySelector("i");
+var fileInput = document.getElementById("files");
 
 function fmt(n) {
   if (n >= 1073741824) return (n / 1073741824).toFixed(2) + " GB";
@@ -84,11 +102,53 @@ function fmt(n) {
   return n + " B";
 }
 
-document.getElementById("files").addEventListener("change", function (e) {
-  picked = Array.prototype.slice.call(e.target.files);
+function totalSize() {
+  return picked.reduce(function (s, f) { return s + f.size; }, 0);
+}
+
+function updateCount() {
+  if (!picked.length) {
+    countEl.innerHTML = "";
+    upBtn.disabled = true;
+    clearBtn.style.display = "none";
+    return;
+  }
+  countEl.innerHTML = "已选 " + picked.length + " / " + MAX_FILES + " 个，共 " + fmt(totalSize()) +
+    "<small>不够可以再点上面继续加 · 满 500 就先传这批</small>";
+  upBtn.disabled = false;
+  clearBtn.style.display = "block";
+}
+
+fileInput.addEventListener("change", function (e) {
+  var fresh = Array.prototype.slice.call(e.target.files);
+  e.target.value = "";
+  if (!fresh.length) return;
+  var added = 0;
+  for (var i = 0; i < fresh.length; i++) {
+    if (picked.length >= MAX_FILES) break;
+    var f = fresh[i];
+    var dup = picked.some(function (p) { return p.name === f.name && p.size === f.size && p.lastModified === f.lastModified; });
+    if (dup) continue;
+    picked.push(f);
+    added++;
+  }
+  if (picked.length >= MAX_FILES && fresh.length > added) {
+    statusEl.textContent = "已经满 500 个了，先传完这批，剩下的传完再选。";
+  } else if (added === 0) {
+    statusEl.textContent = "这些刚才已经选过了。";
+  } else {
+    statusEl.textContent = "这次加了 " + added + " 个。";
+  }
   renderQueue();
-  upBtn.disabled = picked.length === 0;
-  statusEl.textContent = picked.length ? ("选了 " + picked.length + " 个，共 " + fmt(picked.reduce(function (s, f) { return s + f.size; }, 0))) : "";
+  updateCount();
+});
+
+clearBtn.addEventListener("click", function () {
+  picked = [];
+  renderQueue();
+  updateCount();
+  overallEl.style.display = "none";
+  statusEl.textContent = "";
 });
 
 function renderQueue() {
@@ -97,43 +157,44 @@ function renderQueue() {
     var d = document.createElement("div");
     d.className = "item";
     d.id = "q" + i;
-    d.innerHTML = '<div class="nm"></div><div class="meta">' + fmt(f.size) + ' · 等待上传</div><div class="bar"><i></i></div>';
-    d.querySelector(".nm").textContent = f.name;
+    var nm = document.createElement("div");
+    nm.className = "nm";
+    nm.textContent = f.name + " · " + fmt(f.size);
+    var st = document.createElement("div");
+    st.className = "st";
+    st.textContent = "等待";
+    d.appendChild(nm);
+    d.appendChild(st);
     queueEl.appendChild(d);
   });
 }
 
+function setItem(i, text, cls) {
+  var row = document.getElementById("q" + i);
+  if (!row) return;
+  var st = row.querySelector(".st");
+  st.textContent = text;
+  st.className = "st" + (cls ? " " + cls : "");
+}
+
 function uploadOne(file, i) {
   return new Promise(function (resolve) {
-    var row = document.getElementById("q" + i);
-    var meta = row.querySelector(".meta");
-    var fill = row.querySelector(".bar i");
+    setItem(i, "传中…", "run");
     var xhr = new XMLHttpRequest();
     xhr.open("POST", RELAY + "/api/up/" + TOKEN + "/upload?filename=" + encodeURIComponent(file.name), true);
     xhr.setRequestHeader("Content-Type", "application/octet-stream");
     xhr.upload.onprogress = function (ev) {
       if (ev.lengthComputable) {
-        var p = Math.round(ev.loaded / ev.total * 100);
-        fill.style.width = p + "%";
-        meta.textContent = fmt(file.size) + " · 正在传 " + p + "%";
+        setItem(i, "传中 " + Math.round(ev.loaded / ev.total * 100) + "%", "run");
       }
     };
     xhr.onload = function () {
       var ok = false;
       try { ok = JSON.parse(xhr.responseText).ok === true; } catch (e) {}
-      if (xhr.status === 200 && ok) {
-        fill.style.width = "100%";
-        meta.innerHTML = '<span class="ok">✓ 已传上来</span>';
-        resolve(true);
-      } else {
-        meta.innerHTML = '<span class="err">✗ 没传上（' + xhr.status + '），可以再试一次</span>';
-        resolve(false);
-      }
+      if (xhr.status === 200 && ok) { setItem(i, "✓ 已传", "ok"); resolve(true); }
+      else { setItem(i, "✗ 没传上", "err"); resolve(false); }
     };
-    xhr.onerror = function () {
-      meta.innerHTML = '<span class="err">✗ 网络断了，可以再试一次</span>';
-      resolve(false);
-    };
+    xhr.onerror = function () { setItem(i, "✗ 断了", "err"); resolve(false); };
     xhr.send(file);
   });
 }
@@ -141,15 +202,33 @@ function uploadOne(file, i) {
 upBtn.addEventListener("click", async function () {
   if (!picked.length) return;
   upBtn.disabled = true;
+  clearBtn.style.display = "none";
+  fileInput.disabled = true;
+  var total = picked.length;
   var done = 0;
-  for (var i = 0; i < picked.length; i++) {
-    statusEl.textContent = "正在传第 " + (i + 1) + " / " + picked.length + " 个……";
-    if (await uploadOne(picked[i], i)) done++;
+  var failed = 0;
+  overallEl.style.display = "block";
+  overallFill.style.width = "0%";
+  statusEl.textContent = "正在传 0 / " + total + " 个……";
+  var next = 0;
+  async function worker() {
+    while (next < total) {
+      var i = next++;
+      var ok = await uploadOne(picked[i], i);
+      if (ok) done++; else failed++;
+      overallFill.style.width = Math.round((done + failed) / total * 100) + "%";
+      statusEl.textContent = "正在传 " + (done + failed) + " / " + total + " 个……";
+    }
   }
-  statusEl.textContent = done === picked.length
-    ? ("全部传完了，" + done + " 个都收到了。")
-    : ("传完了 " + done + " / " + picked.length + " 个，没传上的可以重新选一次再传。");
+  var workers = [];
+  for (var w = 0; w < Math.min(CONCURRENCY, total); w++) workers.push(worker());
+  await Promise.all(workers);
+  fileInput.disabled = false;
   upBtn.disabled = false;
+  clearBtn.style.display = "block";
+  statusEl.textContent = failed === 0
+    ? ("全部传完了，" + done + " 个都收到了。")
+    : ("传完了 " + done + " / " + total + " 个，" + failed + " 个没传上，可以重新选那几个再传。");
   refreshDone();
 });
 
@@ -166,8 +245,14 @@ async function refreshDone() {
     j.files.forEach(function (f) {
       var d = document.createElement("div");
       d.className = "item";
-      d.innerHTML = '<div class="nm"></div><div class="meta">' + fmt(f.size) + ' · ' + new Date(f.mtime).toLocaleString() + '</div>';
-      d.querySelector(".nm").textContent = f.name.replace(/^\d{14}-[0-9a-f]{8}-/, "");
+      var nm = document.createElement("div");
+      nm.className = "nm";
+      nm.textContent = f.name.replace(/^\d{14}-[0-9a-f]{8}-/, "");
+      var st = document.createElement("div");
+      st.className = "st";
+      st.textContent = fmt(f.size);
+      d.appendChild(nm);
+      d.appendChild(st);
       doneEl.appendChild(d);
     });
   } catch (e) {
