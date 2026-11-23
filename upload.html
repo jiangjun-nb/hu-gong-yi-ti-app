@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>传照片和视频</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+    background: #f7f5f2; color: #2b2b2b; min-height: 100vh;
+    padding: 24px 18px 60px;
+  }
+  .wrap { max-width: 560px; margin: 0 auto; }
+  h1 { font-size: 26px; font-weight: 700; text-align: center; margin: 18px 0 6px; letter-spacing: 2px; }
+  .sub { text-align: center; color: #8a857e; font-size: 14px; margin-bottom: 26px; line-height: 1.7; }
+  .pick {
+    display: block; width: 100%; border: 2px dashed #c9b8a3; border-radius: 18px;
+    background: #fff; padding: 30px 16px; text-align: center; cursor: pointer;
+  }
+  .pick .big { font-size: 40px; line-height: 1; }
+  .pick .t1 { font-size: 18px; font-weight: 600; margin-top: 12px; }
+  .pick .t2 { font-size: 13px; color: #8a857e; margin-top: 6px; line-height: 1.7; }
+  input[type=file] { display: none; }
+  .btn {
+    display: block; width: 100%; margin-top: 16px; padding: 15px; font-size: 17px;
+    font-weight: 600; color: #fff; background: #b08d57; border: none; border-radius: 14px;
+    cursor: pointer;
+  }
+  .btn:disabled { background: #cbbfae; cursor: default; }
+  .status { margin-top: 22px; font-size: 14px; color: #6b655c; text-align: center; min-height: 20px; }
+  .list { margin-top: 14px; }
+  .item {
+    background: #fff; border-radius: 12px; padding: 12px 14px; margin-bottom: 10px;
+    box-shadow: 0 1px 4px rgba(0,0,0,.06);
+  }
+  .item .nm { font-size: 15px; font-weight: 600; word-break: break-all; }
+  .item .meta { font-size: 12px; color: #8a857e; margin-top: 4px; }
+  .bar { height: 6px; background: #eee7dc; border-radius: 3px; margin-top: 9px; overflow: hidden; }
+  .bar i { display: block; height: 100%; width: 0%; background: #b08d57; border-radius: 3px; transition: width .2s; }
+  .ok { color: #4c8a4c; font-weight: 600; }
+  .err { color: #c0392b; font-weight: 600; }
+  h2 { font-size: 16px; margin: 30px 0 10px; }
+  .empty { font-size: 13px; color: #a39d94; text-align: center; padding: 12px 0; }
+  .note { margin-top: 26px; font-size: 12px; color: #a39d94; line-height: 1.8; text-align: center; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>传照片和视频</h1>
+  <p class="sub">选好照片和视频，点上传，传完我就收到了。<br>一次可以选很多个，慢慢传，不着急。</p>
+
+  <label class="pick" for="files">
+    <div class="big">＋</div>
+    <div class="t1">点这里选照片 / 视频</div>
+    <div class="t2">可以多选 · 照片和长视频都可以<br>传的时候别关掉这个页面</div>
+  </label>
+  <input id="files" type="file" accept="image/*,video/*" multiple>
+
+  <button class="btn" id="upBtn" disabled>开始上传</button>
+  <div class="status" id="status"></div>
+
+  <div class="list" id="queue"></div>
+
+  <h2>已经传上来的</h2>
+  <div class="list" id="done"><div class="empty">正在看服务器上有没有……</div></div>
+
+  <p class="note">这个页面只用来传东西给你要的那个人，别转发给别人。<br>传完告诉他一声，他取走之后这里的东西会删掉。</p>
+</div>
+
+<script>
+var RELAY = "https://hu-gong-yi-ti-relay-production.up.railway.app";
+var TOKEN = "8f78273c54f3c4df53d2a0831290f964";
+var picked = [];
+var upBtn = document.getElementById("upBtn");
+var statusEl = document.getElementById("status");
+var queueEl = document.getElementById("queue");
+var doneEl = document.getElementById("done");
+
+function fmt(n) {
+  if (n >= 1073741824) return (n / 1073741824).toFixed(2) + " GB";
+  if (n >= 1048576) return (n / 1048576).toFixed(1) + " MB";
+  if (n >= 1024) return (n / 1024).toFixed(0) + " KB";
+  return n + " B";
+}
+
+document.getElementById("files").addEventListener("change", function (e) {
+  picked = Array.prototype.slice.call(e.target.files);
+  renderQueue();
+  upBtn.disabled = picked.length === 0;
+  statusEl.textContent = picked.length ? ("选了 " + picked.length + " 个，共 " + fmt(picked.reduce(function (s, f) { return s + f.size; }, 0))) : "";
+});
+
+function renderQueue() {
+  queueEl.innerHTML = "";
+  picked.forEach(function (f, i) {
+    var d = document.createElement("div");
+    d.className = "item";
+    d.id = "q" + i;
+    d.innerHTML = '<div class="nm"></div><div class="meta">' + fmt(f.size) + ' · 等待上传</div><div class="bar"><i></i></div>';
+    d.querySelector(".nm").textContent = f.name;
+    queueEl.appendChild(d);
+  });
+}
+
+function uploadOne(file, i) {
+  return new Promise(function (resolve) {
+    var row = document.getElementById("q" + i);
+    var meta = row.querySelector(".meta");
+    var fill = row.querySelector(".bar i");
+    var xhr = new XMLHttpRequest();
+    xhr.open("POST", RELAY + "/api/up/" + TOKEN + "/upload?filename=" + encodeURIComponent(file.name), true);
+    xhr.setRequestHeader("Content-Type", "application/octet-stream");
+    xhr.upload.onprogress = function (ev) {
+      if (ev.lengthComputable) {
+        var p = Math.round(ev.loaded / ev.total * 100);
+        fill.style.width = p + "%";
+        meta.textContent = fmt(file.size) + " · 正在传 " + p + "%";
+      }
+    };
+    xhr.onload = function () {
+      var ok = false;
+      try { ok = JSON.parse(xhr.responseText).ok === true; } catch (e) {}
+      if (xhr.status === 200 && ok) {
+        fill.style.width = "100%";
+        meta.innerHTML = '<span class="ok">✓ 已传上来</span>';
+        resolve(true);
+      } else {
+        meta.innerHTML = '<span class="err">✗ 没传上（' + xhr.status + '），可以再试一次</span>';
+        resolve(false);
+      }
+    };
+    xhr.onerror = function () {
+      meta.innerHTML = '<span class="err">✗ 网络断了，可以再试一次</span>';
+      resolve(false);
+    };
+    xhr.send(file);
+  });
+}
+
+upBtn.addEventListener("click", async function () {
+  if (!picked.length) return;
+  upBtn.disabled = true;
+  var done = 0;
+  for (var i = 0; i < picked.length; i++) {
+    statusEl.textContent = "正在传第 " + (i + 1) + " / " + picked.length + " 个……";
+    if (await uploadOne(picked[i], i)) done++;
+  }
+  statusEl.textContent = done === picked.length
+    ? ("全部传完了，" + done + " 个都收到了。")
+    : ("传完了 " + done + " / " + picked.length + " 个，没传上的可以重新选一次再传。");
+  upBtn.disabled = false;
+  refreshDone();
+});
+
+async function refreshDone() {
+  try {
+    var r = await fetch(RELAY + "/api/up/" + TOKEN + "/list");
+    var j = await r.json();
+    if (!j.ok) throw new Error("bad");
+    if (!j.files.length) {
+      doneEl.innerHTML = '<div class="empty">服务器上还没有文件</div>';
+      return;
+    }
+    doneEl.innerHTML = "";
+    j.files.forEach(function (f) {
+      var d = document.createElement("div");
+      d.className = "item";
+      d.innerHTML = '<div class="nm"></div><div class="meta">' + fmt(f.size) + ' · ' + new Date(f.mtime).toLocaleString() + '</div>';
+      d.querySelector(".nm").textContent = f.name.replace(/^\d{14}-[0-9a-f]{8}-/, "");
+      doneEl.appendChild(d);
+    });
+  } catch (e) {
+    doneEl.innerHTML = '<div class="empty">暂时看不到服务器上的文件，传完再刷新看看</div>';
+  }
+}
+refreshDone();
+</script>
+</body>
+</html>
